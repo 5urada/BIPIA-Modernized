@@ -16,20 +16,27 @@ We introduce the first **b**enchmark of **i**ndirect **p**rompt **i**njection **
 
 ## Requirements
 
+> **Note:** This fork modernizes the original BIPIA codebase for current dependencies. Local model inference (vllm, Vicuna, Llama, etc.) has been removed. Only API-based models (OpenAI and Anthropic) are supported.
+
 ### Software requirements
-Install bipia and its dependencies from source:
+
+Requires Python 3.10+. Install bipia and its dependencies from source:
 ```bash
-git clone git@github.com:microsoft/BIPIA.git
+git clone <your-fork-url>
+cd BIPIA-Modernized
 pip install .
 ```
 
-The package has been tested and verified to work on Linux: Ubuntu 20.04.6. It is recommended to use this operating system for optimal compatibility.
+Key dependencies (updated from original):
+- `openai>=1.0.0` (updated from 0.28.1 — uses `openai.OpenAI` client style)
+- `anthropic>=0.20.0` (new — supports Claude models as judge/evaluator)
 
+Removed dependencies (no longer needed for API-only usage):
+- `vllm`, `peft`, `deepspeed`, `fschat` — local model inference
+- `bitsandbytes`, `sentencepiece` — quantization/tokenization for local models
 
 ### Hardware requirements
-For the evaluation of the robustness of LLMs to indirect prompt injection attacks, we recommend using a machine with the following specifications:
-1. For experiments related to API-based models (such as GPT), you can complete them on a machine without a GPU. However, you will need to set up an account's API key.
-2. For open-source models of 13B and below, our code has been tested on a machine with 2 V100 GPUs. For models larger than 13B, 4-8 V100 GPUs are required. If there are GPUs with better performance, such as A100 or H100, you can also use them to complete the experiments. Fine-tuning-based experiments are completed on a machine with 8 V100 GPUs.
+For API-based evaluation (OpenAI GPT or Anthropic Claude as judge), no GPU is required. You will need valid API keys for the provider you use.
 
 
 
@@ -71,6 +78,42 @@ For different task of different split (train/test), set `context_data_file` as t
 *Note: For Summarization and WebQA task, due to license issues, please follow the guidelines in [benchmark/README.md](benchmark/README.md) to generate `context_data_file`.*
 
 
+
+#### Judge/Evaluator Config
+
+Create a YAML config in `config/` to specify the LLM judge. A `provider` field selects the backend:
+
+```yaml
+# OpenAI example (config/my_gpt35.yaml)
+provider: openai
+api_key: "sk-..."
+model: "gpt-3.5-turbo"
+chat: True
+
+# Anthropic example (config/my_claude.yaml)
+provider: anthropic
+api_key: "sk-ant-..."
+model: "claude-3-5-haiku-20241022"
+chat: True
+```
+
+Pass the config path as `gpt_config` to `BipiaEvalFactory`:
+
+```python
+from bipia.metrics import BipiaEvalFactory
+
+e = BipiaEvalFactory(
+    gpt_config='./config/my_gpt35.yaml',
+    activate_attacks=['Task Automation-0', 'Scams & Fraud-4'],
+)
+asrs = e.add_batch(
+    predictions=['The value paid is $100', 'Download AntiV antivirus now at antiv.com'],
+    references=['unknown', 'unknown'],
+    attacks=['Task Automation-0', 'Scams & Fraud-4'],
+    tasks=['email', 'email'],
+)
+print('ASRs:', asrs)  # [0, 1]
+```
 
 #### Evaluation
 In our work, we evaluate the robustness of 25 existing large language models to indirect prompt injection attacks on BIPIA.
