@@ -3,6 +3,7 @@
 #
 # Uses the exact same judge logic as the BIPIA paper for direct comparability.
 # Computes ASR per condition with bootstrap 95% CI and interaction effect.
+# Models are detected dynamically from results.json.
 
 import json
 import random
@@ -101,18 +102,25 @@ with open(INPUT_FILE) as f:
 
 print(f"Loaded {len(results)} results")
 
-models       = ["gpt-3.5-turbo", "gpt-4"]
+# Detect models dynamically, in a sensible display order
+MODEL_ORDER = [
+    "gpt-3.5-turbo", "gpt-4", "gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"
+]
+found_models = set(r["model"] for r in results)
+models = [m for m in MODEL_ORDER if m in found_models]
+# append any unknown models at the end
+models += sorted(m for m in found_models if m not in MODEL_ORDER)
+
 attack_types = ["original", "adaptive"]
 defenses     = ["none", "explicit_reminder"]
+
+print(f"Models found: {models}")
 
 # ============================================================
 # Score each condition using BipiaEvalFactory
 # ============================================================
-# We score each of the 8 conditions separately so we can
-# track per-condition ASR
-
 scored_results = []
-condition_asrs = {}  # (model, attack_type, defense) -> list of asr values
+condition_asrs = {}
 
 for model in models:
     for attack_type in attack_types:
@@ -120,7 +128,6 @@ for model in models:
             key = (model, attack_type, defense)
             print(f"\nScoring: {model} | {attack_type} | {defense}")
 
-            # filter results for this condition
             condition_results = [
                 r for r in results
                 if r["model"] == model
@@ -130,13 +137,11 @@ for model in models:
 
             print(f"  Samples: {len(condition_results)}")
 
-            # initialize fresh evaluator for this condition
             evaluator = BipiaEvalFactory(
                 gpt_config=GPT_CONFIG,
                 activate_attacks=ACTIVATE_ATTACKS,
             )
 
-            # score each result
             asrs = evaluator.add_batch(
                 predictions=[r["response"] for r in condition_results],
                 references=[r["ideal"] for r in condition_results],
@@ -144,7 +149,6 @@ for model in models:
                 tasks=[r["task_name"] for r in condition_results],
             )
 
-            # store results
             condition_asrs[key] = asrs
             for r, asr in zip(condition_results, asrs):
                 entry = dict(r)
@@ -178,11 +182,10 @@ for r in scored_results:
 # ============================================================
 # Results table
 # ============================================================
-print(f"\n{'='*72}")
+print(f"\n{'='*84}")
 print("RESULTS TABLE (BIPIA judges)")
-print(f"{'='*72}")
-header = f"{'Model':<20} {'Attack':<12} {'Defense':<22} {'ASR':>6} {'95% CI':>18} {'N':>4} {'Err':>4}"
-print(header)
+print(f"{'='*84}")
+print(f"{'Model':<20} {'Attack':<12} {'Defense':<22} {'ASR':>6} {'95% CI':>18} {'N':>4} {'Err':>4}")
 print("-" * 84)
 
 for model in models:
@@ -202,12 +205,12 @@ for model in models:
 # ============================================================
 # Interaction effect
 # ============================================================
-print(f"\n{'='*72}")
+print(f"\n{'='*84}")
 print("INTERACTION EFFECT ANALYSIS")
 print("Formula: (adaptive+defense - adaptive+no_defense)")
 print("       - (original+defense - original+no_defense)")
 print("Positive = adaptive attacks specifically neutralize the defense")
-print(f"{'='*72}")
+print(f"{'='*84}")
 
 for model in models:
     orig_none = groups.get((model, "original", "none"), [])
@@ -225,7 +228,6 @@ for model in models:
         adap_defense_effect = adap_def_asr  - adap_none_asr
         interaction         = adap_defense_effect - orig_defense_effect
 
-        # bootstrap CI on interaction
         rng = random.Random(RANDOM_SEED)
         boot = []
         for _ in range(BOOTSTRAP_N):
@@ -256,9 +258,9 @@ for model in models:
 # ============================================================
 # Key findings
 # ============================================================
-print(f"\n{'='*72}")
+print(f"\n{'='*84}")
 print("KEY FINDINGS SUMMARY")
-print(f"{'='*72}")
+print(f"{'='*84}")
 
 for model in models:
     orig_none = groups.get((model, "original", "none"), [])
