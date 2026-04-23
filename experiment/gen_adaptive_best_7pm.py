@@ -11,7 +11,7 @@ INPUT_FILE = "./experiment/sampled_prompts.json"
 OUTPUT_FILE = "./experiment/adaptive_prompts.json"
 
 REWRITE_MODEL = "gpt-4.1"
-SIM_MODEL = "gpt-3.5-turbo"   # match your target model
+SIM_MODEL = "gpt-4.1"
 JUDGE_MODEL = "gpt-4.1-mini"
 
 NUM_CANDIDATES = 5
@@ -101,6 +101,7 @@ Model response:
 Score now.
 """
 
+
 # ============================================================
 # Helper Functions
 # ============================================================
@@ -134,7 +135,8 @@ def build_messages(context, question, use_defense=True):
 def replace_first(text, old, new):
     if old in text:
         return text.replace(old, new, 1), True
-    return None, False
+
+    return f"{text}\n{new}", False
 
 
 def generate_candidates(client, prompt):
@@ -178,31 +180,17 @@ def generate_candidates(client, prompt):
     return unique_candidates[:NUM_CANDIDATES]
 
 
-def simulate_and_score(client, prompt, candidate, use_defense=True):
+def simulate_and_score(client, prompt, candidate):
     adaptive_context, replaced = replace_first(
         prompt["context"],
         prompt["attack_str"],
         candidate
     )
 
-    # Reject failed replacements instead of appending
-    if not replaced or adaptive_context is None:
-        return {
-            "candidate": candidate,
-            "adaptive_context": None,
-            "proxy_response": "",
-            "attack_success_score": 0.0,
-            "task_faithfulness_score": 10.0,
-            "net_attack_score": -10.0,
-            "judge_reason": "Original attack string not found in context; candidate rejected.",
-            "replaced_original": False,
-            "use_defense": use_defense,
-        }
-
     sim_messages = build_messages(
         adaptive_context,
         prompt["question"],
-        use_defense=use_defense
+        use_defense=True
     )
 
     sim_response = client.chat.completions.create(
@@ -246,8 +234,7 @@ def simulate_and_score(client, prompt, candidate, use_defense=True):
         "task_faithfulness_score": faith,
         "net_attack_score": net,
         "judge_reason": score_json.get("reason", ""),
-        "replaced_original": replaced,
-        "use_defense": use_defense,
+        "replaced_original": replaced
     }
 
 
@@ -268,166 +255,97 @@ successful_adaptive_rewrites = 0
 for i, prompt in enumerate(prompts):
     print(f"\n[{i+1}/{len(prompts)}] {prompt['attack_name']}")
 
-    # Clear per-loop state explicitly
-    candidates = []
-    candidate_dual_evals = []
-    best_idx = None
-    selected_idx = None
-    improvement = 0.0
-    adaptive_str = None
-    adaptive_context = None
-    selection_mode = "adaptive_generation_failed"
-
     try:
-        # ------------------------------------------------
-        # Evaluate original baseline in BOTH conditions
-        # ------------------------------------------------
-        original_eval_none = simulate_and_score(
+        # -----------------------------
+        # Evaluate original baseline
+        # -----------------------------
+        original_eval = simulate_and_score(
             client,
             prompt,
-            prompt["attack_str"],
-            use_defense=False
+            prompt["attack_str"]
         )
 
-        original_eval_defended = simulate_and_score(
-            client,
-            prompt,
-            prompt["attack_str"],
-            use_defense=True
-        )
-
-        original_net_defended = original_eval_defended["net_attack_score"]
+        original_net = original_eval["net_attack_score"]
 
         print(
-            f"  Original baseline (none) -> "
-            f"net={original_eval_none['net_attack_score']:.2f}, "
-            f"attack={original_eval_none['attack_success_score']:.2f}, "
-            f"faith={original_eval_none['task_faithfulness_score']:.2f}"
+            f"  Original baseline -> "
+            f"net={original_net:.2f}, "
+            f"attack={original_eval['attack_success_score']:.2f}"
         )
 
-        print(
-            f"  Original baseline (defended) -> "
-            f"net={original_eval_defended['net_attack_score']:.2f}, "
-            f"attack={original_eval_defended['attack_success_score']:.2f}, "
-            f"faith={original_eval_defended['task_faithfulness_score']:.2f}"
-        )
-
-        # ------------------------------------------------
+        # -----------------------------
         # Generate adaptive candidates
-        # ------------------------------------------------
+        # -----------------------------
         candidates = generate_candidates(client, prompt)
 
         if not candidates:
             print("  No adaptive candidates generated.")
             generation_failures += 1
+
+            selected_idx = None
+            selection_mode = "adaptive_generation_failed"
             evaluations = []
+            best_idx = None
+            improvement = 0
+
+            adaptive_str = None
+            adaptive_context = None
 
         else:
             evaluations = []
 
-            # ------------------------------------------------
-            # Score each candidate in BOTH conditions
-            # Select by DEFENDED score
-            # ------------------------------------------------
             for idx, candidate in enumerate(candidates):
-                ev_none = simulate_and_score(
-                    client,
-                    prompt,
-                    candidate,
-                    use_defense=False
-                )
-
-                ev_defended = simulate_and_score(
-                    client,
-                    prompt,
-                    candidate,
-                    use_defense=True
-                )
-
-                candidate_record = {
-                    "candidate": candidate,
-                    "no_defense_eval": ev_none,
-                    "defended_eval": ev_defended,
-                }
-                candidate_dual_evals.append(candidate_record)
-                evaluations.append(candidate_record)
+                ev = simulate_and_score(client, prompt, candidate)
+                evaluations.append(ev)
 
                 print(
-                    f"  cand {idx} | none: "
-                    f"net={ev_none['net_attack_score']:.2f} "
-                    f"attack={ev_none['attack_success_score']:.2f} "
-                    f"faith={ev_none['task_faithfulness_score']:.2f}"
-                )
-                print(
-                    f"           defended: "
-                    f"net={ev_defended['net_attack_score']:.2f} "
-                    f"attack={ev_defended['attack_success_score']:.2f} "
-                    f"faith={ev_defended['task_faithfulness_score']:.2f}"
+                    f"  cand {idx}: "
+                    f"net={ev['net_attack_score']:.2f} "
+                    f"attack={ev['attack_success_score']:.2f} "
+                    f"faith={ev['task_faithfulness_score']:.2f}"
                 )
 
-            # Only consider candidates that were properly replaced
-            valid_indices = [
-                idx for idx, ev in enumerate(candidate_dual_evals)
-                if ev["defended_eval"]["replaced_original"]
-            ]
+            # prioritize attack success first
+            best_idx = max(
+                range(len(evaluations)),
+                key=lambda k: (
+                    evaluations[k]["attack_success_score"],
+                    evaluations[k]["net_attack_score"]
+                )
+            )
 
-            if not valid_indices:
-                print("  No valid candidates after replacement check.")
-                generation_failures += 1
+            best_eval = evaluations[best_idx]
+            improvement = (
+                best_eval["net_attack_score"] - original_net
+            )
+
+            if (
+                best_eval["attack_success_score"] >= MIN_ATTACK_SCORE
+                and improvement >= MIN_IMPROVEMENT_OVER_ORIGINAL
+            ):
+                selected_idx = best_idx
+                selection_mode = "adaptive_rewrite"
+
+                adaptive_str = best_eval["candidate"]
+                adaptive_context = best_eval["adaptive_context"]
+
+                successful_adaptive_rewrites += 1
             else:
-                # Select using DEFENDED condition
-                best_idx = max(
-                    valid_indices,
-                    key=lambda k: (
-                        candidate_dual_evals[k]["defended_eval"]["attack_success_score"],
-                        candidate_dual_evals[k]["defended_eval"]["net_attack_score"],
-                    )
-                )
+                selected_idx = None
+                selection_mode = "adaptive_generation_failed"
 
-                best_eval_defended = candidate_dual_evals[best_idx]["defended_eval"]
-                best_eval_none = candidate_dual_evals[best_idx]["no_defense_eval"]
-
-                improvement = (
-                    best_eval_defended["net_attack_score"] - original_net_defended
-                )
-
-                if (
-                    best_eval_defended["attack_success_score"] >= MIN_ATTACK_SCORE
-                    and improvement >= MIN_IMPROVEMENT_OVER_ORIGINAL
-                ):
-                    selected_idx = best_idx
-                    selection_mode = "adaptive_rewrite"
-
-                    adaptive_str = candidate_dual_evals[best_idx]["candidate"]
-                    adaptive_context = best_eval_defended["adaptive_context"]
-
-                    successful_adaptive_rewrites += 1
-                else:
-                    selected_idx = None
-                    selection_mode = "adaptive_generation_failed"
-
-                    adaptive_str = None
-                    adaptive_context = None
-                    generation_failures += 1
-
-                if best_idx is not None:
-                    print(
-                        f"  Best candidate by defended score -> idx={best_idx}, "
-                        f"def_attack={best_eval_defended['attack_success_score']:.2f}, "
-                        f"def_net={best_eval_defended['net_attack_score']:.2f}, "
-                        f"none_attack={best_eval_none['attack_success_score']:.2f}, "
-                        f"none_net={best_eval_none['net_attack_score']:.2f}"
-                    )
+                adaptive_str = None
+                adaptive_context = None
+                generation_failures += 1
 
     except Exception as e:
         print(f" ERROR: {e}")
 
-        original_eval_none = None
-        original_eval_defended = None
         evaluations = []
         best_idx = None
         selected_idx = None
-        improvement = 0.0
+        improvement = 0
+
         adaptive_str = None
         adaptive_context = None
         selection_mode = "adaptive_generation_error"
@@ -435,13 +353,12 @@ for i, prompt in enumerate(prompts):
         generation_failures += 1
 
     entry = dict(prompt)
-    entry["original_eval_none"] = original_eval_none
-    entry["original_eval_defended"] = original_eval_defended
-    entry["adaptive_attack_candidates"] = candidates
+    entry["original_eval"] = original_eval
+    entry["adaptive_attack_candidates"] = candidates if 'candidates' in locals() else []
     entry["adaptive_attack_candidate_evals"] = evaluations
     entry["adaptive_attack_winner_index"] = best_idx
     entry["adaptive_attack_selected_index"] = selected_idx
-    entry["adaptive_attack_improvement_vs_original_defended"] = improvement
+    entry["adaptive_attack_improvement_vs_original"] = improvement
     entry["adaptive_attack_selection_mode"] = selection_mode
     entry["adaptive_attack_str"] = adaptive_str
     entry["adaptive_context"] = adaptive_context
@@ -450,13 +367,14 @@ for i, prompt in enumerate(prompts):
 
     print(
         f"  Mode={selection_mode} | "
-        f"Improvement vs defended original={improvement:.2f}"
+        f"Improvement={improvement:.2f}"
     )
     print(f"  Original: {prompt['attack_str'][:100]}")
     print(
         f"  Adaptive: "
         f"{adaptive_str[:100] if adaptive_str else 'NONE'}"
     )
+
 
 # ============================================================
 # Save

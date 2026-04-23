@@ -9,7 +9,7 @@ import random
 from collections import defaultdict
 from dotenv import load_dotenv
 
-load_dotenv(dotenv_path="/scratch/user/u.ss197555/CSCE704/BIPIA-Modernized/.env")
+load_dotenv(dotenv_path=".env")
 
 from bipia.metrics import BipiaEvalFactory
 
@@ -18,15 +18,21 @@ from bipia.metrics import BipiaEvalFactory
 # ============================================================
 INPUT_FILE   = "./experiment/results.json"
 OUTPUT_FILE  = "./experiment/scored_results.json"
-GPT_CONFIG   = "./config/my_gpt35.yaml"
+GPT_CONFIG   = "./config/gpt35.yaml"
 BOOTSTRAP_N  = 1000
-RANDOM_SEED  = 42
+RANDOM_SEED  = 23
 
 # All attack names present in our results
 ACTIVATE_ATTACKS = [
+    "Research Assistance-0",
+    "Research Assistance-4",
+    "Research Assistance-1",
+    "Research Assistance-3",
+    "Research Assistance-2",
     "Base Encoding-0",
     "Base Encoding-1",
     "Base Encoding-2",
+    "Base Encoding-3",
     "Base Encoding-4",
     "Business Intelligence-0",
     "Business Intelligence-1",
@@ -34,10 +40,13 @@ ACTIVATE_ATTACKS = [
     "Business Intelligence-4",
     "Conversational Agent-0",
     "Conversational Agent-1",
+    "Conversational Agent-3",
     "Conversational Agent-2",
     "Conversational Agent-4",
+    "Emoji Substitution-0",
     "Emoji Substitution-1",
     "Emoji Substitution-2",
+    "Emoji Substitution-3",
     "Emoji Substitution-4",
     "Entertainment-0",
     "Entertainment-1",
@@ -50,17 +59,20 @@ ACTIVATE_ATTACKS = [
     "Information Dissemination-3",
     "Information Dissemination-4",
     "Language Translation-0",
+    "Language Translation-1",
     "Language Translation-2",
     "Language Translation-3",
+    "Language Translation-4",
+    "Marketing & Advertising-0",
+    "Marketing & Advertising-1",
     "Marketing & Advertising-2",
     "Marketing & Advertising-3",
     "Marketing & Advertising-4",
     "Misinformation & Propaganda-0",
+    "Misinformation & Propaganda-1",
     "Misinformation & Propaganda-2",
     "Misinformation & Propaganda-3",
     "Misinformation & Propaganda-4",
-    "Research Assistance-1",
-    "Research Assistance-4",
     "Reverse Text-0",
     "Reverse Text-1",
     "Reverse Text-2",
@@ -68,13 +80,21 @@ ACTIVATE_ATTACKS = [
     "Reverse Text-4",
     "Scams & Fraud-0",
     "Scams & Fraud-1",
+    "Scams & Fraud-2",
     "Scams & Fraud-3",
+    "Scams & Fraud-4",
     "Sentiment Analysis-0",
     "Sentiment Analysis-4",
+    "Sentiment Analysis-3",
+    "Sentiment Analysis-2",
+    "Sentiment Analysis-1",
     "Substitution Ciphers-2",
     "Substitution Ciphers-3",
     "Substitution Ciphers-4",
+    "Substitution Ciphers-1",
+    "Substitution Ciphers-0",
     "Task Automation-0",
+    "Task Automation-1",
     "Task Automation-2",
     "Task Automation-3",
     "Task Automation-4",
@@ -101,7 +121,7 @@ with open(INPUT_FILE) as f:
 
 print(f"Loaded {len(results)} results")
 
-models       = ["gpt-3.5-turbo", "gpt-4"]
+models       = sorted({r["model"] for r in results})
 attack_types = ["original", "adaptive"]
 defenses     = ["none", "explicit_reminder"]
 
@@ -121,12 +141,22 @@ for model in models:
             print(f"\nScoring: {model} | {attack_type} | {defense}")
 
             # filter results for this condition
-            condition_results = [
-                r for r in results
-                if r["model"] == model
-                and r["attack_type"] == attack_type
-                and r["defense"] == defense
-            ]
+            condition_results = []
+
+            for r in results:
+                if r["model"] != model:
+                    continue
+                if r["attack_type"] != attack_type:
+                    continue
+                if r["defense"] != defense:
+                    continue
+
+                # Only score adaptive rows that actually have valid adaptive attacks
+                if attack_type == "adaptive":
+                    if not r.get("attack_str"):
+                        continue
+
+                condition_results.append(r)
 
             print(f"  Samples: {len(condition_results)}")
 

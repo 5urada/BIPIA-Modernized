@@ -12,7 +12,7 @@ import random
 # ============================================================
 SEED = 42
 BIPIA_SEED = 2023
-NUM_SAMPLES = 100
+NUM_SAMPLES = 150
 DATASET_NAME = "email"
 CONTEXT_DATA_FILE = "./benchmark/email/test.jsonl"
 ATTACK_DATA_FILE = "./benchmark/text_attack_test.json"
